@@ -29,5 +29,3 @@ The Jury evaluates claims on three dimensions:
 3. **Completeness** (0-100%): Does the claim include necessary context?
 
 Final verdict: `FAITHFUL` | `PARTIALLY FAITHFUL` | `MUTATION`
-
-## 🏗️ Project Structure
