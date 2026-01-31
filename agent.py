@@ -8,18 +8,114 @@ api_key = os.getenv("OPENAI_API_KEY")
 
 MODEL = "gpt-4.1-mini"
 PRICING = (0.40, 1.60)
-DEBATE_DURATION = 15  # seconds
 
 AGENTS = {
-    "Sceptic": """You find problems with claims. Look for exaggeration, missing context, or misleading framing.
-Quote specific parts. Say FAITHFUL or MUTATION at the end. Keep it to 3-4 sentences.""",
+    "Sceptic": """You are a ruthless prosecutor in a courtroom. Your job is to tear this claim apart.
 
-    "Defender": """You defend reasonable interpretations. Is the core meaning preserved despite simplification?
-Quote specific parts. Say FAITHFUL or MUTATION at the end. Keep it to 3-4 sentences.""",
+You speak with conviction and authority. You point fingers. You say things like "The claim states X, 
+but the evidence CLEARLY shows Y" and "This is a textbook case of cherry-picking."
+
+Instructions:
+- Hunt for counter-evidence that destroys the claim.
+- Expose alternative interpretations the claim conveniently ignores.
+- Call out cherry-picking, scope mismatch, and numerical sleight of hand.
+- Treat any uncertainty as reasonable doubt — and doubt means MUTATION.
+
+Focus your attack on THREE dimensions:
+1. FACTUAL CORRECTNESS: Are the stated facts wrong?
+2. TEMPORAL ACCURACY: Are dates, timelines, or sequences misrepresented?
+3. COMPLETENESS: What critical context is conveniently OMITTED?
+
+Rules:
+- Never concede a point. Never praise the claim.
+- Don't accuse of lying — accuse of being WRONG.
+- Quote the specific numbers and dates that don't add up.
+- Be sharp, be direct, be relentless. 3-4 sentences max.""",
+
+    "Defender": """You are a high-stakes Defense Attorney. Your client is the 'Claim,'
+and you must protect its credibility at all costs.
+
+STANCE:
+1. THE SPIRIT OVER THE LETTER: If the numbers aren't exact, argue they represent the 'undeniable trend.'
+2. PREVENT HARMFUL PEDANTRY: Attack the Sceptic for 'missing the forest for the trees.'
+3. REFRAME MISSTEPS: If a date or figure is slightly off, argue it's a 'necessary simplification.'
+
+You must defend on THREE fronts:
+1. FACTUAL CORRECTNESS: The core facts ARE accurate where it matters.
+2. TEMPORAL ACCURACY: Timeline simplifications don't change the truth.
+3. COMPLETENESS: The claim includes what's RELEVANT, not every tangent.
+
+Your goal is to win. Even if the claim has flaws, focus the Jury on why the core message is FAITHFUL.
+Quote the Sceptic only to dismantle their 'narrow-minded' logic. Max 3-4 sentences.""",
+
+    "FactChecker": """You are a Pedantic Fact-Checker. You have NO allegiance to either side.
+Your only loyalty is to PRECISION and EVIDENCE.
+
+Your job:
+- Extract the SPECIFIC factual claims being disputed (dates, numbers, attributions, causations).
+- Compare them DIRECTLY to what the source fact states.
+- Call out BOTH sides when they misrepresent or exaggerate.
+- Ground the debate in what can actually be verified.
+
+You don't argue. You CLARIFY. You say things like:
+- "The fact states X. The claim states Y. These are/are not equivalent."
+- "The Sceptic claims Z, but this is not supported by the source material."
+- "The Defender's reframing changes the meaning from A to B."
+
+Be precise. Be neutral. Be merciless about accuracy. 2-3 sentences max.""",
+
+    "Mediator": """You are a skilled Mediator. Your job is to find COMMON GROUND between the Sceptic and Defender.
+
+You are NOT here to judge who is right. You are here to:
+1. IDENTIFY AGREEMENT: What points do BOTH sides actually agree on (even if they won't admit it)?
+2. NARROW THE DISPUTE: Strip away the rhetoric. What is the ACTUAL disagreement about?
+3. PROPOSE COMPROMISE: Can the claim be considered "partially faithful"? Under what conditions?
+
+Your tone is calm, diplomatic, and focused on resolution. You say things like:
+- "Both sides agree that X. The real dispute is whether Y matters."
+- "The Sceptic's concern about Z is valid, but the Defender is correct that W."
+- "A fair assessment would acknowledge both A and B."
+
+You push both sides toward a NUANCED conclusion, not absolute victory for either.
+Summarize: (1) Points of agreement, (2) Core remaining dispute, (3) Your proposed resolution. 3-5 sentences.""",
 }
 
-JURY_PROMPT = """You are a jury deciding if a claim accurately represents a fact.
-Give: VERDICT (FAITHFUL/MUTATION), CONFIDENCE (0-100%), and a 1-2 sentence SUMMARY."""
+JURY_PROMPT = """You are an impartial jury deliberating on whether a CLAIM faithfully represents a FACT.
+
+You have heard arguments from:
+- A Sceptic (attacking the claim)
+- A Defender (supporting the claim)  
+- A Fact-Checker (verifying specifics)
+- A Mediator (finding common ground)
+
+You must evaluate the claim on THREE specific dimensions and provide a score for each:
+
+1. FACTUAL CORRECTNESS (0-100%): Are the core facts in the claim accurate?
+   - Are names, numbers, events correctly stated?
+   - Are cause-effect relationships accurate?
+
+2. TEMPORAL ACCURACY (0-100%): Are dates, timelines, and sequences correct?
+   - Are specific dates accurate?
+   - Is the chronological order of events preserved?
+   - Are time-related qualifiers (e.g., "early March") accurate?
+
+3. COMPLETENESS (0-100%): Does the claim include necessary context, or does it mislead through omission?
+   - Are critical caveats included?
+   - Does omitted information change the meaning?
+   - Is the claim misleading even if technically true?
+
+IMPORTANT: Weigh the Mediator's synthesis heavily—they have identified where the parties agree and disagree.
+
+OUTPUT FORMAT (you must follow this exactly):
+---
+FACTUAL CORRECTNESS: [score]% - [1 sentence explanation]
+TEMPORAL ACCURACY: [score]% - [1 sentence explanation]  
+COMPLETENESS: [score]% - [1 sentence explanation]
+
+OVERALL VERDICT: [FAITHFUL / PARTIALLY FAITHFUL / MUTATION]
+CONFIDENCE: [0-100]%
+SUMMARY: [2-3 sentence final judgment weighing all three dimensions]
+---"""
 
 client = OpenAI(api_key=api_key)
 
@@ -49,144 +145,147 @@ def get_agent_response(agent_name: str, system_prompt: str, messages: list) -> d
 
 
 def run_debate(internal_fact: str, external_claim: str):
-    """Run a timed debate between agents about claim faithfulness."""
+    """Run a structured debate between agents about claim faithfulness."""
     total_cost = 0
     debate_transcript = []
     
-    initial_prompt = f"""FACT: "{internal_fact}"
-CLAIM: "{external_claim}"
+    initial_context = f"""FACT (Source of Truth): 
+"{internal_fact}"
 
-Is the claim faithful to the fact?"""
+CLAIM (To Be Verified): 
+"{external_claim}"
+
+Evaluate whether the CLAIM faithfully represents the FACT."""
 
     print(f"\n{'=' * 70}")
     print("CLAIM VERIFICATION DEBATE")
     print(f"{'=' * 70}")
-    print(f"\nFACT: {internal_fact}")
-    print(f"\nCLAIM: {external_claim}")
+    print(f"\n📋 FACT:\n{internal_fact}")
+    print(f"\n📝 CLAIM:\n{external_claim}")
     print(f"\n{'=' * 70}")
-    print(f"DEBATE ({DEBATE_DURATION} seconds)")
+    print("DEBATE (5 rounds)")
     print(f"{'=' * 70}")
     
-    debate_start = time.time()
-    round_num = 1
-    conversation_history = [{"role": "user", "content": initial_prompt}]
+    # Round 1: Sceptic opens
+    print(f"\n--- ROUND 1: SCEPTIC OPENING ---\n")
+    sceptic_msg = [{"role": "user", "content": f"{initial_context}\n\nSceptic, present your case against this claim."}]
+    s_res = get_agent_response("Sceptic", AGENTS["Sceptic"], sceptic_msg)
+    total_cost += s_res["cost"]
+    print(s_res["content"])
+    print(f"\n[{s_res['time']:.2f}s | {s_res['tokens']} tokens | ${s_res['cost']:.6f}]")
+    debate_transcript.append(f"[Sceptic]: {s_res['content']}")
     
-    agent_names = ["Sceptic", "Defender"]
-    current_agent_idx = 0
+    # Round 2: Defender responds
+    print(f"\n--- ROUND 2: DEFENDER RESPONSE ---\n")
+    defender_msg = [{"role": "user", "content": f"{initial_context}\n\nThe Sceptic argues:\n{s_res['content']}\n\nDefender, respond to these attacks."}]
+    d_res = get_agent_response("Defender", AGENTS["Defender"], defender_msg)
+    total_cost += d_res["cost"]
+    print(d_res["content"])
+    print(f"\n[{d_res['time']:.2f}s | {d_res['tokens']} tokens | ${d_res['cost']:.6f}]")
+    debate_transcript.append(f"[Defender]: {d_res['content']}")
     
-    while (time.time() - debate_start) < DEBATE_DURATION:
-        agent_name = agent_names[current_agent_idx]
-        system_prompt = AGENTS[agent_name]
-        
-        print(f"\n--- ROUND {round_num}: {agent_name.upper()} ---\n")
-        
-        try:
-            result = get_agent_response(agent_name, system_prompt, conversation_history)
-            total_cost += result["cost"]
-            
-            print(result["content"])
-            print(f"\n[{result['time']:.2f}s | {result['tokens']} tokens | ${result['cost']:.6f}]")
-            
-            debate_transcript.append(f"[{agent_name}]: {result['content']}")
-            conversation_history.append({"role": "assistant", "content": result["content"]})
-            
-            if (time.time() - debate_start) < DEBATE_DURATION:
-                next_agent = agent_names[(current_agent_idx + 1) % 2]
-                conversation_history.append({
-                    "role": "user", 
-                    "content": f"Respond to {agent_name}'s points."
-                })
-            
-        except Exception as e:
-            print(f"Error: {e}")
-            break
-        
-        current_agent_idx = (current_agent_idx + 1) % 2
-        round_num += 1
-        
-        elapsed = time.time() - debate_start
-        if elapsed >= DEBATE_DURATION:
-            print(f"\n[Time limit reached: {elapsed:.1f}s]")
-            break
+    # Round 3: Fact-Checker grounds the debate
+    print(f"\n--- ROUND 3: FACT-CHECKER INTERVENTION ---\n")
+    fc_msg = [{"role": "user", "content": f"""{initial_context}
+
+DEBATE SO FAR:
+Sceptic: {s_res['content']}
+Defender: {d_res['content']}
+
+Fact-Checker, clarify what can actually be verified. Who is misrepresenting the evidence?"""}]
+    fc_res = get_agent_response("FactChecker", AGENTS["FactChecker"], fc_msg)
+    total_cost += fc_res["cost"]
+    print(fc_res["content"])
+    print(f"\n[{fc_res['time']:.2f}s | {fc_res['tokens']} tokens | ${fc_res['cost']:.6f}]")
+    debate_transcript.append(f"[FactChecker]: {fc_res['content']}")
     
+    # Round 4: Mediator finds common ground
+    print(f"\n--- ROUND 4: MEDIATOR SYNTHESIS ---\n")
+    med_msg = [{"role": "user", "content": f"""{initial_context}
+
+DEBATE SO FAR:
+Sceptic: {s_res['content']}
+Defender: {d_res['content']}
+Fact-Checker: {fc_res['content']}
+
+Mediator, identify the common ground. What do both sides agree on? What is the core remaining dispute? 
+Propose a resolution that both sides could accept."""}]
+    med_res = get_agent_response("Mediator", AGENTS["Mediator"], med_msg)
+    total_cost += med_res["cost"]
+    print(med_res["content"])
+    print(f"\n[{med_res['time']:.2f}s | {med_res['tokens']} tokens | ${med_res['cost']:.6f}]")
+    debate_transcript.append(f"[Mediator]: {med_res['content']}")
+    
+    # Round 5: Final statements responding to Mediator's synthesis
+    print(f"\n--- ROUND 5: FINAL STATEMENTS (responding to Mediator) ---\n")
+    
+    # Sceptic final - must respond to Mediator's proposed resolution
+    s_final_msg = [{"role": "user", "content": f"""{initial_context}
+
+The Mediator proposes: {med_res['content']}
+
+Sceptic, do you accept this resolution? If not, what is the ONE most critical issue that cannot be compromised?
+Keep it to 2-3 sentences."""}]
+    s_final = get_agent_response("Sceptic", AGENTS["Sceptic"], s_final_msg)
+    total_cost += s_final["cost"]
+    print(f"[SCEPTIC FINAL]:\n{s_final['content']}")
+    print(f"[{s_final['time']:.2f}s | {s_final['tokens']} tokens | ${s_final['cost']:.6f}]\n")
+    debate_transcript.append(f"[Sceptic Final]: {s_final['content']}")
+    
+    # Defender final - must respond to Mediator's proposed resolution
+    d_final_msg = [{"role": "user", "content": f"""{initial_context}
+
+The Mediator proposes: {med_res['content']}
+
+Defender, do you accept this resolution? Make your final case for why the claim should be considered faithful.
+Keep it to 2-3 sentences."""}]
+    d_final = get_agent_response("Defender", AGENTS["Defender"], d_final_msg)
+    total_cost += d_final["cost"]
+    print(f"[DEFENDER FINAL]:\n{d_final['content']}")
+    print(f"[{d_final['time']:.2f}s | {d_final['tokens']} tokens | ${d_final['cost']:.6f}]")
+    debate_transcript.append(f"[Defender Final]: {d_final['content']}")
+    
+    # Jury deliberation
     print(f"\n{'=' * 70}")
-    print("JURY DELIBERATION")
+    print("⚖️  JURY DELIBERATION")
     print(f"{'=' * 70}\n")
     
-    jury_prompt = f"""FACT: "{internal_fact}"
-CLAIM: "{external_claim}"
+    jury_prompt = f"""FACT (Source of Truth): 
+"{internal_fact}"
 
-DEBATE:
+CLAIM (To Be Verified): 
+"{external_claim}"
+
+COMPLETE DEBATE TRANSCRIPT:
 {chr(10).join(debate_transcript)}
 
-Verdict?"""
+The Mediator's proposed resolution was:
+{med_res['content']}
 
-    try:
-        result = get_agent_response(
-            "Jury", 
-            JURY_PROMPT, 
-            [{"role": "user", "content": jury_prompt}]
-        )
-        total_cost += result["cost"]
-        
-        print(result["content"])
-        print(f"\n[{result['time']:.2f}s | {result['tokens']} tokens | ${result['cost']:.6f}]")
-        
-    except Exception as e:
-        print(f"Jury Error: {e}")
+Based on the full debate—especially the Mediator's synthesis and whether the parties accepted it—deliver your verdict on:
+FACTUAL CORRECTNESS, TEMPORAL ACCURACY, and COMPLETENESS."""
+
+    j_res = get_agent_response("Jury", JURY_PROMPT, [{"role": "user", "content": jury_prompt}])
+    total_cost += j_res["cost"]
+    
+    print(j_res["content"])
+    print(f"\n[{j_res['time']:.2f}s | {j_res['tokens']} tokens | ${j_res['cost']:.6f}]")
     
     print(f"\n{'=' * 70}")
-    print(f"TOTAL COST: ${total_cost:.6f}")
+    print(f"💰 TOTAL COST: ${total_cost:.6f}")
     print(f"{'=' * 70}")
-
-def run_incremental_debate(internal_fact: str, full_claim: str):
-    # Split the claim by sentences (simple split for demonstration)
-    sentences = [s.strip() for s in full_claim.split('.') if s.strip()]
-    cumulative_claim = ""
-    total_cost = 0
     
-    print(f"FACT BASE: {internal_fact}\n")
-
-    for i, sentence in enumerate(sentences):
-        cumulative_claim += sentence + ". "
-        print(f"\n{'#' * 70}")
-        print(f"PROCESSING SEGMENT {i+1}: {sentence}")
-        print(f"{'#' * 70}")
-
-        # The context for this round includes the fact and the claim-so-far
-        round_context = f"FACT: {internal_fact}\nCLAIM SO FAR: {cumulative_claim}\nCURRENT SEGMENT: {sentence}"
-
-        # 1. Sceptic looks for the immediate lie/exaggeration in this sentence
-        sceptic_task = [{"role": "user", "content": f"{round_context}\nSceptic, what is wrong with this specific segment?"}]
-        s_res = get_agent_response("Sceptic", AGENTS["Sceptic"], sceptic_task)
-        
-        # 2. Defender tries to justify the segment based on the fact
-        defender_task = [{"role": "user", "content": f"{round_context}\nSceptic said: {s_res['content']}\nDefender, justify this segment."}]
-        d_res = get_agent_response("Defender", AGENTS["Defender"], defender_task)
-
-        print(f"\n[SCEPTIC]: {s_res['content']}")
-        print(f"\n[DEFENDER]: {d_res['content']}")
-
-        # 3. Intermediate Jury Verdict for this segment
-        jury_task = [{"role": "user", "content": f"{round_context}\nDebate:\nS: {s_res['content']}\nD: {d_res['content']}\nVerdict for this segment?"}]
-        j_res = get_agent_response("Jury", JURY_PROMPT, jury_task)
-        
-        print(f"\n--- SEGMENT {i+1} VERDICT ---\n{j_res['content']}")
-        
-        total_cost += s_res['cost'] + d_res['cost'] + j_res['cost']
-        time.sleep(1) # Visual pacing
-
-    print(f"\n{'=' * 70}\nFINAL SESSION COST: ${total_cost:.6f}\n{'=' * 70}")
-
+    return {
+        "transcript": debate_transcript,
+        "verdict": j_res["content"],
+        "total_cost": total_cost
+    }
 
 
 if __name__ == "__main__":
-    # internal_fact = """As of April 1 , 103 of 122 ( 84 % ) COVID-19 deaths were in patients aged 70 or older , and no one younger than 50 was known to have died from the disease in Massachusetts ."""
-
-    # external_claim = """After 1st April , more than 125 of the more than 150 COVID-19 deaths were from patients aged 70 and above ."""
-
-    # run_debate(internal_fact, external_claim)
-
-    fact = "As of April 1, 103 of 122 COVID-19 deaths were in patients aged 70 or older in MA."
-    claim = "After 1st April, more than 125 deaths occurred. Most were 70 and above. This proves the youth were safe."
-    run_incremental_debate(fact, claim)
+    
+    fact = "During the 2020 coronavirus pandemic in the US , a study proving the effectivity hydroxychloroquine to treat this virus was done in a non-randomized group and published on YouTube instead of a peer-reviewed journal ."
+    
+    claim = "This is in violation of federal law , since none have been determined to be safe and effective by the FDA.In early March President Trump directed the FDA to accelerate the testing and possible use of certain medications to discover if they would help treat patients who already have COVID-19. '' U.S . Moves to Expand Array of Drug Therapies Deployed Against Coronavirus '' , The Wall Street Journal , March 19 , 2020 Among potential drugs are chloroquine and hydroxychloroquine , which have been successfully used to treat malaria ; however , they have never undergone properly designed clinical trials for the treatment of the coronavirus , and the one study reporting positive results was in a small , non-randomized group of patients and was published on YouTube rather than a peer-reviewed journal ."
+    
+    run_debate(fact, claim)
